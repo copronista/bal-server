@@ -176,7 +176,7 @@ async fn echo_push(req: Request<hyper::body::Incoming>,
 } 
 fn create_database(db: Connection){
     println!("database sanity check");
-    let _ = db.execute("CREATE TABLE IF NOT EXISTS tbl_tx      (txid PRIMARY KEY, wtxid, ntxid, tx, locktime, network, network_fees, reqid, fees, status DEFAULT 0);");
+    let _ = db.execute("CREATE TABLE IF NOT EXISTS tbl_tx      (txid PRIMARY KEY, wtxid, ntxid, tx, locktime integer, network, network_fees, reqid, fees, status integer DEFAULT 0);");
     let _ = db.execute("CREATE TABLE IF NOT EXISTS tbl_input   (txid, in_txid,in_vout, spend_txidi);");
     let _ = db.execute("CREATE TABLE IF NOT EXISTS tbl_output  (txid, script_pubkey, address, amount);");
 
