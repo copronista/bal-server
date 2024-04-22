@@ -45,7 +45,7 @@ impl Default for MyConfig {
             bind:"127.0.0.1".to_string(),
             bind_port:9137,
             requests_file:"rawrequests.log".to_string(),
-            db_file: "../prova.db".to_string()
+            db_file: "../bal.db".to_string()
         }
     }
 }
