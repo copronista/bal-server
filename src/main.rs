@@ -50,11 +50,23 @@ impl Default for MyConfig {
     }
 }
 
-async fn echo_push(req: Request<hyper::body::Incoming>,
+async fn echo_info(
+                   param: &str,
+) -> Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
+        //let whole_body = req.collect().await?.to_bytes();
+        println!("echo info!!!{}",param);
+        if param  == "regtest"{
+            return Ok(Response::new(full("{\"address\":\"bcrt1qzwtth3feqpzyq7kkn46xpautw07rnzk62vyelk\",\"base_fee\":\"100000\"}")));
+        }
+        Ok(Response::new(full("{\"address\":\"wrong param\",\"base_fee\":\"100000\"}")))
+        //Err(Response::new(full("{\"address\":\"wrong\",\"base_fee\":\"100000\"}")))
+            
+}
+async fn echo_push(whole_body: &Bytes,
                    cfg: &MyConfig,
                    param: &str,
 ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
-        let whole_body = req.collect().await?.to_bytes();
+        //let whole_body = req.collect().await?.to_bytes();
         let strbody = std::str::from_utf8(&whole_body).unwrap();
         let lines = strbody.split("\n");
         let file = cfg.requests_file.to_string();
@@ -94,6 +106,7 @@ async fn echo_push(req: Request<hyper::body::Incoming>,
                 Ok(raw_tx) => raw_tx,
                 Err(_) => continue,
             };
+            //dbg!(&raw_tx);
             let tx: Transaction = match consensus::deserialize(&raw_tx){
                 Ok(tx) => tx,
                 Err(err) => {println!("error: unable to parse tx: {}\n{}",line,err);continue}
@@ -208,19 +221,29 @@ async fn echo(
     *not_found.status_mut() = StatusCode::NOT_FOUND;
     let mut ret: Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> = Ok(not_found);
 
+    let uri = req.uri().path().to_string();
+    //dbg!(&req);
     match req.method() {
         // Serve some instructions at /
         &Method::POST => {
-            let uri = req.uri().path().to_string();
-
+            let whole_body = req.collect().await?.to_bytes();
             if let Some(param) = match_uri(r"^?/?(?P<param>[^/]?+)?/pushtxs$",uri.as_str()) {
-                    ret =echo_push(req,cfg,param).await;
+                    ret = echo_push(&whole_body,cfg,param).await;
             }
+                       ret
+        }
+        &Method::GET => {
+            //let whole_body = req.collect().await?.to_bytes();
+            if let Some(param) = match_uri(r"^?/?(?P<param>[^/]?+)?/info$",uri.as_str()) {
+                   // ret = echo_info(&whole_body,cfg,param).await;
+                    ret = echo_info(param).await;
+            }
+
             ret
         }
 
         // Return the 404 Not Found for other routes.
-        _ => {ret}
+        _ => {Ok(Response::new(full("ok")))}
     }
 }
 
