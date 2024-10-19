@@ -13,52 +13,85 @@ use std::io::Write;
 use std::net::IpAddr;
 
 
-use serde::Serialize;
-use serde::Deserialize;
 use std::time::{SystemTime,UNIX_EPOCH};
 use std::sync::Arc;
 use sqlite::{State,Connection};
 
-use bitcoin::consensus;
-use bitcoin::Transaction;
-use bitcoin::Network;
+use bitcoin::{consensus, Transaction, Network};
 
 use hex_conservative::FromHex;
 use regex::Regex;
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+struct NetConfig {
+    address: String,
+    fixed_fee: u64,
+}
+
+impl Default for NetConfig {
+    fn default() -> Self {
+        NetConfig {
+            address: "".to_string(),
+            fixed_fee: 10000,
+        }
+    }
+}
+
+impl NetConfig {
+    fn default_regtest() -> Self {
+        NetConfig {
+            address: "bcrt1qzx38ch5gpa0dla2v2sycxpzx4zsrfre3s5et5h".to_string(),
+            fixed_fee: 10000,
+        }
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 struct MyConfig {
-    address: String,
-    fixed_fee: u64,
-    bind: String,
-    bind_port: u16,
+    regtest: NetConfig,
+    signet: NetConfig,
+    testnet4: NetConfig,
+    testnet3: NetConfig,
+    mainnet: NetConfig,
+    bind_address: String,
+    bind_port: u16, // Changed to u16 for port numbers
     requests_file: String,
-    db_file: String
-
+    db_file: String,
 }
 
 impl Default for MyConfig {
     fn default() -> Self {
         MyConfig {
-            address: "Unknown".to_string(),
-            fixed_fee: 10000,
-            bind:"127.0.0.1".to_string(),
-            bind_port:9137,
-            requests_file:"rawrequests.log".to_string(),
-            db_file: "../bal.db".to_string()
+            regtest: NetConfig::default_regtest(),
+            signet: NetConfig::default(), // Use default for other networks
+            testnet4: NetConfig::default(),
+            testnet3: NetConfig::default(),
+            mainnet: NetConfig::default(),
+            bind_address: "127.0.0.1".to_string(),
+            bind_port: 9137, // Ensure this is a u16
+            requests_file: "rawrequests.log".to_string(),
+            db_file: "../bal.db".to_string(),
+        }
+    }
+}
+impl MyConfig {
+    fn get_net_config(&self, param: &str) -> &NetConfig{
+        match param {
+            "regtest" => &self.regtest,
+            _ => &self.mainnet, 
         }
     }
 }
 
 async fn echo_info(
                    param: &str,
+                   cfg: &MyConfig,
 ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
         //let whole_body = req.collect().await?.to_bytes();
         println!("echo info!!!{}",param);
-        if param  == "regtest"{
-            return Ok(Response::new(full("{\"address\":\"bcrt1qzwtth3feqpzyq7kkn46xpautw07rnzk62vyelk\",\"base_fee\":\"100000\"}")));
-        }
-        Ok(Response::new(full("{\"address\":\"wrong param\",\"base_fee\":\"100000\"}")))
+        let netconfig=MyConfig::get_net_config(cfg,param);
+        return Ok(Response::new(full("{\"address\":\"".to_owned()+&netconfig.address+"\",\"base_fee\":\""+&netconfig.fixed_fee.to_string()+"\"}")));
         //Err(Response::new(full("{\"address\":\"wrong\",\"base_fee\":\"100000\"}")))
             
 }
@@ -73,12 +106,14 @@ async fn echo_push(whole_body: &Bytes,
         //if !Path::new(&file).exists() {
         //    File::create(&file).unwrap();
         //}
+        dbg!(param);
         let network = match param{
             "testnet" => Network::Testnet,
             "signet" => Network::Signet,
             "regtest" => Network::Regtest,
             &_ => Network::Bitcoin,
         };
+        
         let req_time = SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwards").as_nanos();
         
         let mut file = OpenOptions::new()
@@ -90,12 +125,13 @@ async fn echo_push(whole_body: &Bytes,
     
         
         let mut sqltxs = "INSERT INTO tbl_tx (txid, wtxid, ntxid, tx, locktime, reqid, network)".to_string();
-        let mut sqlinps = "INSERT INTO tbl_input (txid, in_txid,in_vout)".to_string();
-        let mut sqlouts = "INSERT INTO tbl_output (txid, script_pubkey, address, amount)\n".to_string();
+        //let mut sqlinps = "INSERT INTO tbl_input (txid, in_txid,in_vout)".to_string();
+        //let mut sqlouts = "INSERT INTO tbl_output (txid, script_pubkey, address, amount)\n".to_string();
         let mut union_tx = true;
-        let mut union_inps = true;
-        let mut union_outs = true;
+        //let mut union_inps = true;
+        //let mut union_outs = true;
         let db = sqlite::open(&cfg.db_file).unwrap();
+        let netconfig = MyConfig::get_net_config(cfg,param);
         for line in lines {
             let linea = format!("{req_time}:{line}");
             println!("New Tx: {}", linea);
@@ -106,58 +142,75 @@ async fn echo_push(whole_body: &Bytes,
                 Ok(raw_tx) => raw_tx,
                 Err(_) => continue,
             };
-            //dbg!(&raw_tx);
-            let tx: Transaction = match consensus::deserialize(&raw_tx){
-                Ok(tx) => tx,
-                Err(err) => {println!("error: unable to parse tx: {}\n{}",line,err);continue}
-            };
-            let txid = tx.txid().to_string();
-            
-            let mut statement = db.prepare("SELECT * FROM tbl_tx WHERE txid = ?").unwrap();
-            statement.bind((1,&txid[..])).unwrap();
-            //statement.bind((1,"Bob")).unwrap();
-            if let Ok(State::Row) = statement.next() {
-                continue;
-            }
-            let ntxid = tx.ntxid();
-            let wtxid = tx.wtxid();
-            let locktime = tx.lock_time;
-            if !union_tx {
-                sqltxs = format!("{sqltxs} UNION ALL");
-            }else{
-                union_tx = false;
-            }
+            if raw_tx.len() > 0 {
+                let tx: Transaction = match consensus::deserialize(&raw_tx){
+                    Ok(tx) => tx,
+                    Err(err) => {println!("error: unable to parse tx: {}\n{}",line,err);continue}
+                };
+                let txid = tx.txid().to_string();
+                
+                let mut statement = db.prepare("SELECT * FROM tbl_tx WHERE txid = ?").unwrap();
+                statement.bind((1,&txid[..])).unwrap();
+                //statement.bind((1,"Bob")).unwrap();
+                if let Ok(State::Row) = statement.next() {
+                    continue;
+                }
+                let ntxid = tx.ntxid();
+                let wtxid = tx.wtxid();
+                let mut found = false;
+                let locktime = tx.lock_time;
+                for output in tx.output{
+                    let script_pubkey = output.script_pubkey;
+                    let address = match bitcoin::Address::from_script(script_pubkey.as_script(), network){
+                        Ok(address) => address.to_string(),
+                        Err(_) => String::new(),
+                    };
+                    let amount = output.value;
+                    dbg!(&amount); 
+                    found= true;
+                    if address == netconfig.address.to_string() && amount.to_sat() >= netconfig.fixed_fee{
+                        found = true;
+                        break;
+                    }
+                }
+                if !found{
+                    continue
+                }
+                if !union_tx {
+                    sqltxs = format!("{sqltxs} UNION ALL");
+                }else{
+                    union_tx = false;
+                }
                 sqltxs = format!("{sqltxs}  SELECT '{txid}', '{wtxid}', '{ntxid}', '{line}', '{locktime}', '{req_time}', '{network}'");
 
-            
-            for input in tx.input{
-                if !union_inps{
-                    sqlinps = format!("{sqlinps} UNION ALL");
-                }else{
-                    union_inps = false;
-                }
-                let in_txid = input.previous_output.txid;
-                let in_vout = input.previous_output.vout;
-                dbg!(input.sequence.is_rbf());
+            }            
+            //for input in tx.input{
+            //    if !union_inps{
+            //        sqlinps = format!("{sqlinps} UNION ALL");
+            //    }else{
+            //        union_inps = false;
+            //    }
+            //   let in_txid = input.previous_output.txid;
+            //   let in_vout = input.previous_output.vout;
+            //   dbg!(input.sequence.is_rbf());
 
-                sqlinps = format!("{sqlinps} SELECT \"{txid}\", \"{in_txid}\",\"{in_vout}\"");
-            }
-            for output in tx.output{
-                if !union_outs {
-                    sqlouts = format!("{sqlouts} UNION ALL");
-                }else{
-                    union_outs=false;
-                }
-                let script_pubkey = output.script_pubkey;
-                let address = match bitcoin::Address::from_script(script_pubkey.as_script(), network){
-                    Ok(address) => address.to_string(),
-                    Err(_) => String::new(),
-                };
-                    
-                let amount = output.value;
-                sqlouts = format!("{sqlouts} SELECT \"{txid}\", \"{script_pubkey}\", \"{address}\", \"{amount}\"\n");
+            //   sqlinps = format!("{sqlinps} SELECT \"{txid}\", \"{in_txid}\",\"{in_vout}\"");
+            //}
+            //for output in tx.output{
+            //    if !union_outs {
+            //        sqlouts = format!("{sqlouts} UNION ALL");
+            //    }else{
+            //        union_outs=false;
+            //    }
+            //    let script_pubkey = output.script_pubkey;
+            //    let address = match bitcoin::Address::from_script(script_pubkey.as_script(), network){
+            //        Ok(address) => address.to_string(),
+            //        Err(_) => String::new(),
+            //    };
+            //    let amount = output.value;
+            //    sqlouts = format!("{sqlouts} SELECT \"{txid}\", \"{script_pubkey}\", \"{address}\", \"{amount}\"\n");
 
-            }
+            //}
 
 
         }
@@ -167,25 +220,22 @@ async fn echo_push(whole_body: &Bytes,
             let _ = db.execute("ROLLBACK");
             error = true;
         }
-        if !error {
-            if let Err(_) = db.execute(sqlinps){
-                let _ = db.execute("ROLLBACK");
-                error = true
-            }
-        }
-        if !error {
-            if let Err(_) = db.execute(sqlouts){
-                let _ = db.execute("ROLLBACK");
-                error = true;
-            }
-        }
+        //if !error {
+        //    if let Err(_) = db.execute(sqlinps){
+        //        let _ = db.execute("ROLLBACK");
+        //        error = true
+        //    }
+        //}
+        //if !error {
+        //    if let Err(_) = db.execute(sqlouts){
+        //        let _ = db.execute("ROLLBACK");
+        //        error = true;
+        //    }
+        //}
         if !error {
             let _ = db.execute("COMMIT");
         }
-
-
         Ok(Response::new(full("thx")))
-
 } 
 fn create_database(db: Connection){
     println!("database sanity check");
@@ -236,7 +286,7 @@ async fn echo(
             //let whole_body = req.collect().await?.to_bytes();
             if let Some(param) = match_uri(r"^?/?(?P<param>[^/]?+)?/info$",uri.as_str()) {
                    // ret = echo_info(&whole_body,cfg,param).await;
-                    ret = echo_info(param).await;
+                    ret = echo_info(param,cfg).await;
             }
 
             ret
@@ -286,8 +336,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     println!("The configuration file path is: {:#?}", file);
 
-
-    let addr = cfg.bind.to_string();
+    let addr = cfg.bind_address.to_string();
+    println!("bind address:{}",addr);
     let addr: IpAddr = addr.parse()?;
 
     let listener = TcpListener::bind((addr,cfg.bind_port)).await?;
