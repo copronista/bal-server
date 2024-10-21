@@ -79,6 +79,8 @@ impl MyConfig {
     fn get_net_config(&self, param: &str) -> &NetConfig{
         match param {
             "regtest" => &self.regtest,
+            "testnet" => &self.testnet3,
+            "signet" => &self.signet,
             _ => &self.mainnet, 
         }
     }
@@ -311,8 +313,9 @@ fn full<T: Into<Bytes>>(chunk: T) -> BoxBody<Bytes, hyper::Error> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let cfg: Arc<MyConfig> = Arc::new(confy::load("bal-server",None).expect("cant_load"));
     let file = confy::get_configuration_file_path("bal-server",None).expect("Error while getting path");
+    println!("The configuration file path is: {:#?}", file);
+    let cfg: Arc<MyConfig> = Arc::new(confy::load("bal-server",None).expect("cant_load"));
     let db = sqlite::open(&cfg.db_file).unwrap();
     create_database(db);
     {
@@ -334,7 +337,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         //});
     }
 
-    println!("The configuration file path is: {:#?}", file);
 
     let addr = cfg.bind_address.to_string();
     println!("bind address:{}",addr);
