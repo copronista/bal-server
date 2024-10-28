@@ -11,8 +11,12 @@ http-body-util = "0.1"
 hyper-util = { version = "0.1", features = ["full"] }
 bytes = "1.2"
 serde = { version = "1.0.152", features = ["derive"] } # <- Only one serde version needed (serde or serde_derive) 
+serde_json = "1.0.116"
 confy = "0.6.1"
 bitcoin = "0.31.0"
 sqlite = "0.34.0"
 hex-conservative = "0.1.1"
 regex = "1.10.4"
+log = "0.4.21"
+env_logger = "0.11.5"
+

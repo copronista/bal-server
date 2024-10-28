@@ -15,6 +15,7 @@ use std::net::IpAddr;
 
 use std::time::{SystemTime,UNIX_EPOCH};
 use std::sync::Arc;
+use std::collections::HashMap;
 use sqlite::{State,Connection};
 
 use bitcoin::{consensus, Transaction, Network};
@@ -22,6 +23,8 @@ use bitcoin::{consensus, Transaction, Network};
 use hex_conservative::FromHex;
 use regex::Regex;
 use serde::{Serialize, Deserialize};
+use log::{info,error,trace,debug};
+use serde_json;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct NetConfig {
@@ -86,16 +89,115 @@ impl MyConfig {
     }
 }
 
+/*
+async fn collect_body(req: Request<hyper::body::Frame<Bytes>>, len:i32) -> Result<Bytes, hyper::Error> {
+    info!("collect body:{}",len);
+    let mut body_bytes = Vec::new();
+    let mut stream = req.into_body();
+    while let Some(chunk) = stream.next().await {
+        match chunk {
+            Ok(data) => {
+                body_bytes.extend_from_slice(&data);
+                if body_bytes.len() >= len {
+                    body_bytes.truncate(len);
+                    break;
+                }
+            }
+            Err(_) => {
+                break;
+            }
+        }
+    }
+
+    Ok(body_bytes)
+}
+*/
 async fn echo_info(
                    param: &str,
                    cfg: &MyConfig,
 ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
-        //let whole_body = req.collect().await?.to_bytes();
-        println!("echo info!!!{}",param);
+        info!("echo info!!!{}",param);
         let netconfig=MyConfig::get_net_config(cfg,param);
         return Ok(Response::new(full("{\"address\":\"".to_owned()+&netconfig.address+"\",\"base_fee\":\""+&netconfig.fixed_fee.to_string()+"\"}")));
-        //Err(Response::new(full("{\"address\":\"wrong\",\"base_fee\":\"100000\"}")))
-            
+}
+async fn echo_search(whole_body: &Bytes,
+                     cfg: &MyConfig,
+) -> Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
+    info!("echo search!!!");
+    let strbody = std::str::from_utf8(&whole_body).unwrap();
+    info!("{}",strbody);
+    trace!("{}",strbody.len());
+
+    let mut response = Response::new(full("Bad data received".to_owned()));
+    *response.status_mut() = StatusCode::BAD_REQUEST; // Set status to 400
+                                                      //
+                                                      //
+    if strbody.len() >0 && strbody.len()<=70 {
+        let db = sqlite::open(&cfg.db_file).unwrap();
+        trace!("qua ci arrivo");
+        let mut statement = db.prepare("SELECT * FROM tbl_tx WHERE txid = ?").unwrap();
+        statement.bind((1, strbody)).unwrap();
+
+        while let Ok(State::Row) = statement.next() {
+            trace!("qua tutto ok");
+            let mut response_data = HashMap::new();
+            match statement.read::<String, _>("status") {
+                Ok(value) => response_data.insert("status", value),
+                Err(e) => {
+                    error!("Error reading status: {}", e);
+                    break;
+                    //response_data.insert("status", "Error".to_string())
+                }
+            };
+
+            // Read the transaction (tx)
+            match statement.read::<String, _>("tx") {
+                Ok(value) => response_data.insert("tx", value),
+                Err(e) => {
+                    error!("Error reading tx: {}", e);
+                    break;
+                    //response_data.insert("tx", "Error".to_string())
+                }
+            };
+
+            match statement.read::<String, _>("our_address") {
+                Ok(value) => response_data.insert("our_address", value),
+                Err(e) => {
+                    error!("Error reading address: {}", e);
+                    break;
+                    //response_data.insert("tx", "Error".to_string())
+                }
+            };
+
+            match statement.read::<String, _>("our_fees") {
+                Ok(value) => response_data.insert("our_fees", value),
+                Err(e) => {
+                    error!("Error reading fees: {}", e);
+                    break;
+                    //response_data.insert("tx", "Error".to_string())
+                }
+            };
+
+            // Read the request id (reqid)
+            match statement.read::<String, _>("reqid") {
+                Ok(value) => response_data.insert("time", value),
+                Err(e) => {
+                    error!("Error reading reqid: {}", e);
+                    break;
+                    //response_data.insert("time", "Error".to_string())
+                }
+            };
+            response = match serde_json::to_string(&response_data){
+                Ok(json_data) => Response::new(full(json_data)),
+                Err(_) => {break;}
+            };
+
+            return Ok(response);
+        }
+    }
+    Ok(response)
+
+    
 }
 async fn echo_push(whole_body: &Bytes,
                    cfg: &MyConfig,
@@ -105,10 +207,13 @@ async fn echo_push(whole_body: &Bytes,
         let strbody = std::str::from_utf8(&whole_body).unwrap();
         let lines = strbody.split("\n");
         let file = cfg.requests_file.to_string();
+
+        let mut response = Response::new(full("Bad data received".to_owned()));
+        *response.status_mut() = StatusCode::BAD_REQUEST; // Set status to 400
         //if !Path::new(&file).exists() {
         //    File::create(&file).unwrap();
         //}
-        dbg!(param);
+        debug!("network: {}", param);
         let network = match param{
             "testnet" => Network::Testnet,
             "signet" => Network::Signet,
@@ -126,41 +231,50 @@ async fn echo_push(whole_body: &Bytes,
             .unwrap();
     
         
-        let mut sqltxs = "INSERT INTO tbl_tx (txid, wtxid, ntxid, tx, locktime, reqid, network)".to_string();
+        let sqltxshead = "INSERT INTO tbl_tx (txid, wtxid, ntxid, tx, locktime, reqid, network, our_address, our_fees)".to_string();
+        let mut sqltxs = "".to_string();
         //let mut sqlinps = "INSERT INTO tbl_input (txid, in_txid,in_vout)".to_string();
         //let mut sqlouts = "INSERT INTO tbl_output (txid, script_pubkey, address, amount)\n".to_string();
         let mut union_tx = true;
+        let mut already_present = false;
         //let mut union_inps = true;
         //let mut union_outs = true;
         let db = sqlite::open(&cfg.db_file).unwrap();
         let netconfig = MyConfig::get_net_config(cfg,param);
         for line in lines {
             let linea = format!("{req_time}:{line}");
-            println!("New Tx: {}", linea);
+            info!("New Tx: {}", linea);
             if let Err(e) = writeln!(file, "{}",linea) {
-                eprintln!("Couldn't write to file: {}", e);
+                error!("Couldn't write to file: {}", e);
             }
             let raw_tx =  match Vec::<u8>::from_hex(line) {
                 Ok(raw_tx) => raw_tx,
-                Err(_) => continue,
+                Err(err) => {
+                    error!("rawtx error: {}",err);
+                    continue
+                }
             };
             if raw_tx.len() > 0 {
+                trace!("len: {}",raw_tx.len());
                 let tx: Transaction = match consensus::deserialize(&raw_tx){
                     Ok(tx) => tx,
-                    Err(err) => {println!("error: unable to parse tx: {}\n{}",line,err);continue}
+                    Err(err) => {error!("error: unable to parse tx: {}\n{}",line,err);continue}
                 };
                 let txid = tx.txid().to_string();
-                
+                trace!("txid: {}",txid);
                 let mut statement = db.prepare("SELECT * FROM tbl_tx WHERE txid = ?").unwrap();
                 statement.bind((1,&txid[..])).unwrap();
                 //statement.bind((1,"Bob")).unwrap();
                 if let Ok(State::Row) = statement.next() {
+                    already_present=true;
                     continue;
                 }
                 let ntxid = tx.ntxid();
                 let wtxid = tx.wtxid();
                 let mut found = false;
                 let locktime = tx.lock_time;
+                let mut our_fees = 0;
+                let mut our_address:String = "".to_string();
                 for output in tx.output{
                     let script_pubkey = output.script_pubkey;
                     let address = match bitcoin::Address::from_script(script_pubkey.as_script(), network){
@@ -169,23 +283,34 @@ async fn echo_push(whole_body: &Bytes,
                     };
                     let amount = output.value;
                     dbg!(&amount); 
-                    found= true;
+                    //search wllexecutor output
                     if address == netconfig.address.to_string() && amount.to_sat() >= netconfig.fixed_fee{
+                        our_fees = amount.to_sat();
+                        our_address = netconfig.address.to_string();
                         found = true;
+                        trace!("address and fees are correct {}: {}",our_address,our_fees);
                         break;
+                    }else {
+                        trace!("address and fees not found {}: {}",address,amount.to_sat());
+                        trace!("address and fees not found {}: {}",netconfig.address.to_string(),netconfig.fixed_fee);
                     }
                 }
-                if !found{
-                    continue
+                if found == false{
+                    error!("willexecutor output not found ");
+                    return Ok(response)
+                } else {
+                    if union_tx == false {
+                        sqltxs = format!("{sqltxs} UNION ALL");
+                    }else{
+                        union_tx = false;
+                    }
+                    sqltxs = format!("{sqltxs}  SELECT '{txid}', '{wtxid}', '{ntxid}', '{line}', '{locktime}', '{req_time}', '{network}','{our_address}',{our_fees}");
                 }
-                if !union_tx {
-                    sqltxs = format!("{sqltxs} UNION ALL");
-                }else{
-                    union_tx = false;
-                }
-                sqltxs = format!("{sqltxs}  SELECT '{txid}', '{wtxid}', '{ntxid}', '{line}', '{locktime}', '{req_time}', '{network}'");
 
             }            
+            else{
+                trace!("rawTx len is: {}",raw_tx.len());
+            }
             //for input in tx.input{
             //    if !union_inps{
             //        sqlinps = format!("{sqlinps} UNION ALL");
@@ -216,11 +341,16 @@ async fn echo_push(whole_body: &Bytes,
 
 
         }
+        debug!("SQL: {}",sqltxs);
         let _ = db.execute("BEGIN TRANSACTION");
-        let mut error = false;
-        if let Err(_) = db.execute(sqltxs){
+        let sql = format!("{}{}",sqltxshead,sqltxs);
+        if let Err(err) = db.execute(&sql){
+            error!("error executing sql:{} - {}",&sql,err);
             let _ = db.execute("ROLLBACK");
-            error = true;
+            if already_present == true{
+                return Ok(Response::new(full("already present")))
+            }
+            return Ok(response)
         }
         //if !error {
         //    if let Err(_) = db.execute(sqlinps){
@@ -234,14 +364,12 @@ async fn echo_push(whole_body: &Bytes,
         //        error = true;
         //    }
         //}
-        if !error {
-            let _ = db.execute("COMMIT");
-        }
+        let _ = db.execute("COMMIT");
         Ok(Response::new(full("thx")))
 } 
 fn create_database(db: Connection){
-    println!("database sanity check");
-    let _ = db.execute("CREATE TABLE IF NOT EXISTS tbl_tx      (txid PRIMARY KEY, wtxid, ntxid, tx, locktime integer, network, network_fees, reqid, fees, status integer DEFAULT 0);");
+    info!("database sanity check");
+    let _ = db.execute("CREATE TABLE IF NOT EXISTS tbl_tx      (txid PRIMARY KEY, wtxid, ntxid, tx, locktime integer, network, network_fees, reqid, our_fees, our_address, status integer DEFAULT 0);");
     let _ = db.execute("CREATE TABLE IF NOT EXISTS tbl_input   (txid, in_txid,in_vout, spend_txidi);");
     let _ = db.execute("CREATE TABLE IF NOT EXISTS tbl_output  (txid, script_pubkey, address, amount);");
 
@@ -275,27 +403,30 @@ async fn echo(
 
     let uri = req.uri().path().to_string();
     //dbg!(&req);
+    dbg!(&uri);
     match req.method() {
         // Serve some instructions at /
         &Method::POST => {
             let whole_body = req.collect().await?.to_bytes();
             if let Some(param) = match_uri(r"^?/?(?P<param>[^/]?+)?/pushtxs$",uri.as_str()) {
-                    ret = echo_push(&whole_body,cfg,param).await;
+                //let whole_body = collect_body(req,512_000).await?;
+                ret = echo_push(&whole_body,cfg,param).await;
             }
-                       ret
+            if uri=="/searchtx"{
+                //let whole_body = collect_body(req,64).await?;
+                ret = echo_search(&whole_body,cfg).await;
+            }
+            ret
         }
         &Method::GET => {
-            //let whole_body = req.collect().await?.to_bytes();
             if let Some(param) = match_uri(r"^?/?(?P<param>[^/]?+)?/info$",uri.as_str()) {
-                   // ret = echo_info(&whole_body,cfg,param).await;
-                    ret = echo_info(param,cfg).await;
+                ret = echo_info(param,cfg).await;
             }
-
             ret
         }
 
         // Return the 404 Not Found for other routes.
-        _ => {Ok(Response::new(full("ok")))}
+        _ => ret
     }
 }
 
@@ -313,8 +444,10 @@ fn full<T: Into<Bytes>>(chunk: T) -> BoxBody<Bytes, hyper::Error> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    env_logger::init();
+
     let file = confy::get_configuration_file_path("bal-server",None).expect("Error while getting path");
-    println!("The configuration file path is: {:#?}", file);
+    info!("The configuration file path is: {:#?}", file);
     let cfg: Arc<MyConfig> = Arc::new(confy::load("bal-server",None).expect("cant_load"));
     let db = sqlite::open(&cfg.db_file).unwrap();
     create_database(db);
@@ -339,11 +472,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
 
     let addr = cfg.bind_address.to_string();
-    println!("bind address:{}",addr);
+    info!("bind address:{}",addr);
     let addr: IpAddr = addr.parse()?;
 
     let listener = TcpListener::bind((addr,cfg.bind_port)).await?;
-    println!("Listening on http://{}:{}", addr,cfg.bind_port);
+    info!("Listening on http://{}:{}", addr,cfg.bind_port);
             
     
 
@@ -360,7 +493,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     }))
                     .await
                 {
-                    println!("Error serving connection: {:?}", err);
+                    error!("Error serving connection: {:?}", err);
                 }
 
             }
