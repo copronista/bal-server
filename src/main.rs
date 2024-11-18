@@ -297,7 +297,7 @@ async fn echo_push(whole_body: &Bytes,
                 }
                 if found == false{
                     error!("willexecutor output not found ");
-                    return Ok(response)
+                    //return Ok(response)
                 } else {
                     if union_tx == false {
                         sqltxs = format!("{sqltxs} UNION ALL");
