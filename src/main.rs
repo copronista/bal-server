@@ -11,10 +11,10 @@ use hyper_util::rt::TokioIo;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::net::IpAddr;
-
+use std::env;
 
 use std::time::{SystemTime,UNIX_EPOCH};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::collections::HashMap;
 use sqlite::{State,Connection};
 
@@ -26,7 +26,7 @@ use serde::{Serialize, Deserialize};
 use log::{info,error,trace,debug};
 use serde_json;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone,Serialize, Deserialize)]
 struct NetConfig {
     address: String,
     fixed_fee: u64,
@@ -50,7 +50,7 @@ impl NetConfig {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize,Clone)]
 struct MyConfig {
     regtest: NetConfig,
     signet: NetConfig,
@@ -441,6 +441,53 @@ fn full<T: Into<Bytes>>(chunk: T) -> BoxBody<Bytes, hyper::Error> {
         .map_err(|never| match never {})
         .boxed()
 }
+fn parse_env(cfg: &Arc<Mutex<MyConfig>>){
+    let mut cfg_lock = cfg.lock().unwrap();
+    match env::var("BAL_SERVER_DB_FILE") {
+        Ok(value) => {
+            cfg_lock.db_file = value;},
+        Err(_) => {},
+    }
+    match env::var("BAL_SERVER_BIND_ADDRESS") {
+        Ok(value) => {
+            cfg_lock.bind_address = value;},
+        Err(_) => {},
+    }
+    match env::var("BAL_SERVER_BIND_PORT") {
+        Ok(value) => {
+            cfg_lock.bind_address = value;},
+        Err(_) => {},
+    }
+    cfg_lock = parse_env_netconfig(cfg_lock,"regtest");    
+    cfg_lock = parse_env_netconfig(cfg_lock,"signet");    
+    cfg_lock = parse_env_netconfig(cfg_lock,"testnet3");    
+    cfg_lock = parse_env_netconfig(cfg_lock,"testnet4");    
+    drop(parse_env_netconfig(cfg_lock,"mainnet"));
+
+}
+fn parse_env_netconfig<'a>(mut cfg_lock: MutexGuard<'a, MyConfig>, chain: &'a str) -> MutexGuard<'a, MyConfig>{
+    let cfg = match chain{
+        "regtest" => &mut cfg_lock.regtest,
+        "signet" => &mut cfg_lock.signet,
+        "testnet3" => &mut cfg_lock.testnet3,
+        "testnet4" => &mut cfg_lock.testnet4,
+        &_ => &mut cfg_lock.mainnet,
+    };
+    match env::var(format!("BAL_SERVER_{}_ADDRESS",chain.to_uppercase())) {
+        Ok(value) => { cfg.address = value; },
+        Err(_) => {},
+    }
+    match env::var(format!("BAL_SERVER_{}_FIXE_FEE",chain.to_uppercase())) {
+        Ok(value) => {
+            match value.parse::<u64>(){
+                Ok(value) =>{ cfg.fixed_fee = value; },
+                Err(_) => {},
+            }
+        }
+        Err(_) => {},
+    }
+    cfg_lock
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -448,44 +495,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let file = confy::get_configuration_file_path("bal-server",None).expect("Error while getting path");
     info!("The configuration file path is: {:#?}", file);
-    let cfg: Arc<MyConfig> = Arc::new(confy::load("bal-server",None).expect("cant_load"));
-    let db = sqlite::open(&cfg.db_file).unwrap();
+    let cfg: Arc<Mutex<MyConfig>> = Arc::new(Mutex::new(confy::load("bal-server",None).expect("cant_load")));
+    parse_env(&cfg);
+    let cfg_lock = cfg.lock().unwrap();
+
+    let db = sqlite::open(&cfg_lock.db_file).unwrap();
     create_database(db);
-    {
-        //let cfg = Arc::clone(&cfg);
-        //thread::spawn(move|| {
-            //let cfg = Arc::clone(&cfg);
-            //let file = cfg.requests_file.to_string();
-            //loop{
-            //        let input = File::open(&file)?;
-            //        let reader = BufReader::new(input);
 
-
-            //        for line in lines.flatten(){
-            //           // println!("{}",line);
-            //        }
-                 
-            //thread::sleep(Duration::from_secs(2));
-            //}
-        //});
-    }
-
-
-    let addr = cfg.bind_address.to_string();
+    let addr = cfg_lock.bind_address.to_string();
     info!("bind address:{}",addr);
     let addr: IpAddr = addr.parse()?;
 
-    let listener = TcpListener::bind((addr,cfg.bind_port)).await?;
-    info!("Listening on http://{}:{}", addr,cfg.bind_port);
-            
+    let listener = TcpListener::bind((addr,cfg_lock.bind_port)).await?;
+    info!("Listening on http://{}:{}", addr,cfg_lock.bind_port);
     
 
     loop {
         let (stream, _) = listener.accept().await?;
         let io = TokioIo::new(stream);
         
-       tokio::task::spawn({
-            let cfg = Arc::clone(&cfg);
+        tokio::task::spawn({
+            let cfg = cfg_lock.clone();
             async move {
                 if let Err(err) = http1::Builder::new()
                     .serve_connection(io, service_fn(|req: Request<hyper::body::Incoming>| async {
