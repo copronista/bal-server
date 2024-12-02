@@ -275,26 +275,28 @@ async fn echo_push(whole_body: &Bytes,
                 let locktime = tx.lock_time;
                 let mut our_fees = 0;
                 let mut our_address:String = "".to_string();
-                for output in tx.output{
-                    let script_pubkey = output.script_pubkey;
-                    let address = match bitcoin::Address::from_script(script_pubkey.as_script(), network){
-                        Ok(address) => address.to_string(),
-                        Err(_) => String::new(),
-                    };
-                    let amount = output.value;
-                    dbg!(&amount); 
-                    //search wllexecutor output
-                    if address == netconfig.address.to_string() && amount.to_sat() >= netconfig.fixed_fee{
-                        our_fees = amount.to_sat();
-                        our_address = netconfig.address.to_string();
-                        found = true;
-                        trace!("address and fees are correct {}: {}",our_address,our_fees);
-                        break;
-                    }else {
-                        trace!("address and fees not found {}: {}",address,amount.to_sat());
-                        trace!("address and fees not found {}: {}",netconfig.address.to_string(),netconfig.fixed_fee);
+                if netconfig.fixed_fee >0 {
+                    for output in tx.output{
+                        let script_pubkey = output.script_pubkey;
+                        let address = match bitcoin::Address::from_script(script_pubkey.as_script(), network){
+                            Ok(address) => address.to_string(),
+                            Err(_) => String::new(),
+                        };
+                        let amount = output.value;
+                        dbg!(&amount); 
+                        //search wllexecutor output
+                        if address == netconfig.address.to_string() && amount.to_sat() >= netconfig.fixed_fee{
+                            our_fees = amount.to_sat();
+                            our_address = netconfig.address.to_string();
+                            found = true;
+                            trace!("address and fees are correct {}: {}",our_address,our_fees);
+                            break;
+                        }else {
+                            trace!("address and fees not found {}: {}",address,amount.to_sat());
+                            trace!("address and fees not found {}: {}",netconfig.address.to_string(),netconfig.fixed_fee);
+                        }
                     }
-                }
+                } else { found = true; }
                 if found == false{
                     error!("willexecutor output not found ");
                     //return Ok(response)
