@@ -360,7 +360,9 @@ async fn echo_push(whole_body: &Bytes,
         if let Err(err) = db.execute(&sql){
             error!("error executing sql:{} - {}",&sql,err);
             let _ = db.execute("ROLLBACK");
+            dbg!(&already_present);
             if already_present == true{
+                trace("already_present = True");
                 return Ok(Response::new(full("already present")))
             }
             return Ok(response)
