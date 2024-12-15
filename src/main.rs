@@ -362,7 +362,7 @@ async fn echo_push(whole_body: &Bytes,
             let _ = db.execute("ROLLBACK");
             dbg!(&already_present);
             if already_present == true{
-                trace("already_present = True");
+                trace!("already_present = True");
                 return Ok(Response::new(full("already present")))
             }
             return Ok(response)
