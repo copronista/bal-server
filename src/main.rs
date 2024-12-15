@@ -242,6 +242,10 @@ async fn echo_push(whole_body: &Bytes,
         let db = sqlite::open(&cfg.db_file).unwrap();
         let netconfig = MyConfig::get_net_config(cfg,param);
         for line in lines {
+            if line.len() == 0{
+                trace!("line len is: {}",line.len());
+                continue
+            }
             let linea = format!("{req_time}:{line}");
             info!("New Tx: {}", linea);
             if let Err(e) = writeln!(file, "{}",linea) {
@@ -266,6 +270,7 @@ async fn echo_push(whole_body: &Bytes,
                 statement.bind((1,&txid[..])).unwrap();
                 //statement.bind((1,"Bob")).unwrap();
                 if let Ok(State::Row) = statement.next() {
+                    trace!("already present");
                     already_present=true;
                     continue;
                 }
@@ -275,6 +280,7 @@ async fn echo_push(whole_body: &Bytes,
                 let locktime = tx.lock_time;
                 let mut our_fees = 0;
                 let mut our_address:String = "".to_string();
+                dbg!(netconfig.fixed_fee);
                 if netconfig.fixed_fee >0 {
                     for output in tx.output{
                         let script_pubkey = output.script_pubkey;
@@ -282,6 +288,7 @@ async fn echo_push(whole_body: &Bytes,
                             Ok(address) => address.to_string(),
                             Err(_) => String::new(),
                         };
+                        dbg!(&address);
                         let amount = output.value;
                         dbg!(&amount); 
                         //search wllexecutor output
@@ -312,6 +319,7 @@ async fn echo_push(whole_body: &Bytes,
             }            
             else{
                 trace!("rawTx len is: {}",raw_tx.len());
+                debug!("{}",&sqltxs);
             }
             //for input in tx.input{
             //    if !union_inps{
@@ -344,6 +352,9 @@ async fn echo_push(whole_body: &Bytes,
 
         }
         debug!("SQL: {}",sqltxs);
+        if sqltxs.len()== 0{
+            return Ok(response)
+        }
         let _ = db.execute("BEGIN TRANSACTION");
         let sql = format!("{}{}",sqltxshead,sqltxs);
         if let Err(err) = db.execute(&sql){
