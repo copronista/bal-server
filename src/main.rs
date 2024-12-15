@@ -353,7 +353,9 @@ async fn echo_push(whole_body: &Bytes,
         }
         debug!("SQL: {}",sqltxs);
         if sqltxs.len()== 0{
-            return Ok(response)
+            if already_present == true{
+                return Ok(Response::new(full("already present")))
+            }
         }
         let _ = db.execute("BEGIN TRANSACTION");
         let sql = format!("{}{}",sqltxshead,sqltxs);
