@@ -36,7 +36,7 @@ impl Default for NetConfig {
     fn default() -> Self {
         NetConfig {
             address: "".to_string(),
-            fixed_fee: 10000,
+            fixed_fee: 50000,
         }
     }
 }
@@ -44,8 +44,8 @@ impl Default for NetConfig {
 impl NetConfig {
     fn default_regtest() -> Self {
         NetConfig {
-            address: "bcrt1qzx38ch5gpa0dla2v2sycxpzx4zsrfre3s5et5h".to_string(),
-            fixed_fee: 10000,
+            address: "".to_string(),
+            fixed_fee: 50000,
         }
     }
 }
@@ -89,29 +89,6 @@ impl MyConfig {
     }
 }
 
-/*
-async fn collect_body(req: Request<hyper::body::Frame<Bytes>>, len:i32) -> Result<Bytes, hyper::Error> {
-    info!("collect body:{}",len);
-    let mut body_bytes = Vec::new();
-    let mut stream = req.into_body();
-    while let Some(chunk) = stream.next().await {
-        match chunk {
-            Ok(data) => {
-                body_bytes.extend_from_slice(&data);
-                if body_bytes.len() >= len {
-                    body_bytes.truncate(len);
-                    break;
-                }
-            }
-            Err(_) => {
-                break;
-            }
-        }
-    }
-
-    Ok(body_bytes)
-}
-*/
 async fn echo_info(
                    param: &str,
                    cfg: &MyConfig,
@@ -129,9 +106,7 @@ async fn echo_search(whole_body: &Bytes,
     trace!("{}",strbody.len());
 
     let mut response = Response::new(full("Bad data received".to_owned()));
-    *response.status_mut() = StatusCode::BAD_REQUEST; // Set status to 400
-                                                      //
-                                                      //
+    *response.status_mut() = StatusCode::BAD_REQUEST; 
     if strbody.len() >0 && strbody.len()<=70 {
         let db = sqlite::open(&cfg.db_file).unwrap();
         trace!("qua ci arrivo");
@@ -209,10 +184,7 @@ async fn echo_push(whole_body: &Bytes,
         let file = cfg.requests_file.to_string();
 
         let mut response = Response::new(full("Bad data received".to_owned()));
-        *response.status_mut() = StatusCode::BAD_REQUEST; // Set status to 400
-        //if !Path::new(&file).exists() {
-        //    File::create(&file).unwrap();
-        //}
+        *response.status_mut() = StatusCode::BAD_REQUEST; 
         debug!("network: {}", param);
         let network = match param{
             "testnet" => Network::Testnet,
@@ -280,7 +252,7 @@ async fn echo_push(whole_body: &Bytes,
                 let locktime = tx.lock_time;
                 let mut our_fees = 0;
                 let mut our_address:String = "".to_string();
-                dbg!(netconfig.fixed_fee);
+                //dbg!(netconfig.fixed_fee);
                 if netconfig.fixed_fee >0 {
                     for output in tx.output{
                         let script_pubkey = output.script_pubkey;
@@ -288,9 +260,9 @@ async fn echo_push(whole_body: &Bytes,
                             Ok(address) => address.to_string(),
                             Err(_) => String::new(),
                         };
-                        dbg!(&address);
+                        //dbg!(&address);
                         let amount = output.value;
-                        dbg!(&amount); 
+                        //dbg!(&amount); 
                         //search wllexecutor output
                         if address == netconfig.address.to_string() && amount.to_sat() >= netconfig.fixed_fee{
                             our_fees = amount.to_sat();
@@ -321,39 +293,11 @@ async fn echo_push(whole_body: &Bytes,
                 trace!("rawTx len is: {}",raw_tx.len());
                 debug!("{}",&sqltxs);
             }
-            //for input in tx.input{
-            //    if !union_inps{
-            //        sqlinps = format!("{sqlinps} UNION ALL");
-            //    }else{
-            //        union_inps = false;
-            //    }
-            //   let in_txid = input.previous_output.txid;
-            //   let in_vout = input.previous_output.vout;
-            //   dbg!(input.sequence.is_rbf());
-
-            //   sqlinps = format!("{sqlinps} SELECT \"{txid}\", \"{in_txid}\",\"{in_vout}\"");
-            //}
-            //for output in tx.output{
-            //    if !union_outs {
-            //        sqlouts = format!("{sqlouts} UNION ALL");
-            //    }else{
-            //        union_outs=false;
-            //    }
-            //    let script_pubkey = output.script_pubkey;
-            //    let address = match bitcoin::Address::from_script(script_pubkey.as_script(), network){
-            //        Ok(address) => address.to_string(),
-            //        Err(_) => String::new(),
-            //    };
-            //    let amount = output.value;
-            //    sqlouts = format!("{sqlouts} SELECT \"{txid}\", \"{script_pubkey}\", \"{address}\", \"{amount}\"\n");
-
-            //}
-
-
         }
         debug!("SQL: {}",sqltxs);
         if sqltxs.len()== 0{
             if already_present == true{
+                //dbg!(already_present);
                 return Ok(Response::new(full("already present")))
             }
         }
@@ -362,11 +306,12 @@ async fn echo_push(whole_body: &Bytes,
         if let Err(err) = db.execute(&sql){
             error!("error executing sql:{} - {}",&sql,err);
             let _ = db.execute("ROLLBACK");
-            dbg!(&already_present);
+            //dbg!(&already_present);
             if already_present == true{
                 trace!("already_present = True");
                 return Ok(Response::new(full("already present")))
             }
+        
             return Ok(response)
         }
         //if !error {
@@ -420,7 +365,7 @@ async fn echo(
 
     let uri = req.uri().path().to_string();
     //dbg!(&req);
-    dbg!(&uri);
+    //dbg!(&uri);
     match req.method() {
         // Serve some instructions at /
         &Method::POST => {
@@ -478,8 +423,8 @@ fn parse_env(cfg: &Arc<Mutex<MyConfig>>){
     cfg_lock = parse_env_netconfig(cfg_lock,"regtest");    
     cfg_lock = parse_env_netconfig(cfg_lock,"signet");    
     cfg_lock = parse_env_netconfig(cfg_lock,"testnet3");    
-    cfg_lock = parse_env_netconfig(cfg_lock,"testnet4");    
-    drop(parse_env_netconfig(cfg_lock,"mainnet"));
+    cfg_lock = parse_env_netconfig(cfg_lock,"testnet");    
+    drop(parse_env_netconfig(cfg_lock,"bitcoin"));
 
 }
 fn parse_env_netconfig<'a>(mut cfg_lock: MutexGuard<'a, MyConfig>, chain: &'a str) -> MutexGuard<'a, MyConfig>{
@@ -487,7 +432,7 @@ fn parse_env_netconfig<'a>(mut cfg_lock: MutexGuard<'a, MyConfig>, chain: &'a st
         "regtest" => &mut cfg_lock.regtest,
         "signet" => &mut cfg_lock.signet,
         "testnet3" => &mut cfg_lock.testnet3,
-        "testnet4" => &mut cfg_lock.testnet4,
+        "testnet" => &mut cfg_lock.testnet4,
         &_ => &mut cfg_lock.mainnet,
     };
     match env::var(format!("BAL_SERVER_{}_ADDRESS",chain.to_uppercase())) {
@@ -505,14 +450,36 @@ fn parse_env_netconfig<'a>(mut cfg_lock: MutexGuard<'a, MyConfig>, chain: &'a st
     }
     cfg_lock
 }
+fn get_default_config()-> MyConfig {
+
+    let file = confy::get_configuration_file_path("bal-server",None).expect("Error while getting path");
+    info!("Default configuration file path is: {:#?}", file);
+    confy::load("bal-server",None).expect("cant_load")
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     env_logger::init();
+    let cfg: Arc<Mutex<MyConfig>> = match env::var("BAL_SERVER_CONFIG_FILE") {
+        Ok(value) => {
+            Arc::new(Mutex::new(
+                match confy::load_path(value.to_string()){
+                    Ok(val) => {
+                        info!("The configuration file path is: {:#?}", value);
+                        val
+                    },
+                    Err(err) => {
+                        error!("{}",err);
+                        get_default_config()
+                    }
+                }
+            ))
+        },
+        Err(_) => {
+            Arc::new(Mutex::new(get_default_config()))
+        },
+    };
 
-    let file = confy::get_configuration_file_path("bal-server",None).expect("Error while getting path");
-    info!("The configuration file path is: {:#?}", file);
-    let cfg: Arc<Mutex<MyConfig>> = Arc::new(Mutex::new(confy::load("bal-server",None).expect("cant_load")));
     parse_env(&cfg);
     let cfg_lock = cfg.lock().unwrap();
 
